@@ -18,7 +18,7 @@ func TestRunAndParseCommandHelper(t *testing.T) {
 			continue
 		}
 		args := os.Args[i+1:]
-		if len(args) != 3 || args[0] != "-r" || args[1] != "show" {
+		if len(args) < 3 || args[0] != "-r" || args[1] != "show" {
 			t.Fatal("Unexpected birdc arguments:", args)
 		}
 		if args[2] == "queue-command-error" {
@@ -30,7 +30,7 @@ func TestRunAndParseCommandHelper(t *testing.T) {
 }
 
 func setupRunAndParseTest() func() {
-	oldClientConf, oldCache := ClientConf, cache
+	oldClientConf, oldCache, oldBirdVersion := ClientConf, cache, BirdVersion
 	RateLimitConf.Lock()
 	oldRateLimitConf := RateLimitConf.Conf
 	RateLimitConf.Conf = RateLimitConfig{Enabled: false}
@@ -43,7 +43,7 @@ func setupRunAndParseTest() func() {
 	cache = NewMemoryCache(10)
 
 	return func() {
-		ClientConf, cache = oldClientConf, oldCache
+		ClientConf, cache, BirdVersion = oldClientConf, oldCache, oldBirdVersion
 		RateLimitConf.Lock()
 		RateLimitConf.Conf = oldRateLimitConf
 		RateLimitConf.Unlock()
@@ -208,5 +208,72 @@ func TestRunAndParseCleansQueueAfterPanic(t *testing.T) {
 				t.Error("Retried command remained in RunQueue")
 			}
 		})
+	}
+}
+
+func TestRunAndParseUsesNamespacedCacheKey(t *testing.T) {
+	cleanup := setupRunAndParseTest()
+	defer cleanup()
+
+	key := GetCacheKey("TestCommand", "arg")
+	cmd := "test-command-cmd"
+	defer RunQueue.Delete(cmd)
+
+	parsed, fromCache := RunAndParse(true, key, cmd, func(io.Reader) Parsed {
+		return Parsed{"value": 1}
+	}, nil)
+	if fromCache || parsed["value"] != 1 {
+		t.Fatalf("Expected fresh parsed result, got %v (from cache: %v)", parsed, fromCache)
+	}
+
+	if _, err := cache.Get(key); err != nil {
+		t.Errorf("Expected cache entry under %q: %v", key, err)
+	}
+	if _, err := cache.Get(cmd); err == nil {
+		t.Errorf("Did not expect cache entry under command string %q", cmd)
+	}
+
+	// Verify both the direct cache hit and duplicate-waiter paths read from key.
+	for _, useCache := range []bool{true, false} {
+		var group sync.WaitGroup
+		if !useCache {
+			RunQueue.Store(cmd, &group)
+		}
+		cached, hit := RunAndParse(useCache, key, cmd, func(io.Reader) Parsed {
+			t.Fatalf("useCache=%t unexpectedly re-ran parser", useCache)
+			return Parsed{"value": 2}
+		}, nil)
+		if !useCache {
+			RunQueue.Delete(cmd)
+		}
+		if !hit || cached["value"] != 1 {
+			t.Errorf("useCache=%t expected cached value 1 from %q, got %v (hit: %v)", useCache, key, cached, hit)
+		}
+	}
+}
+
+func TestPipeRoutesFilteredCacheKeys(t *testing.T) {
+	cleanup := setupRunAndParseTest()
+	defer cleanup()
+	BirdVersion = 2
+
+	if _, fromCache := PipeRoutesFiltered(true, "pipeA", "master"); fromCache {
+		t.Fatal("Expected initial PipeRoutesFiltered call to miss cache")
+	}
+	if _, fromCache := PipeRoutesFilteredProtocol(true, "pipeA", "master", "proto1"); fromCache {
+		t.Fatal("Expected initial PipeRoutesFilteredProtocol(proto1) call to miss cache")
+	}
+	if _, fromCache := PipeRoutesFilteredProtocol(true, "pipeA", "master", "proto2"); fromCache {
+		t.Fatal("Expected initial PipeRoutesFilteredProtocol(proto2) call to miss cache")
+	}
+
+	if _, fromCache := PipeRoutesFiltered(true, "pipeA", "master"); !fromCache {
+		t.Error("Expected second PipeRoutesFiltered call to hit cache")
+	}
+	if _, fromCache := PipeRoutesFilteredProtocol(true, "pipeA", "master", "proto1"); !fromCache {
+		t.Error("Expected second PipeRoutesFilteredProtocol(proto1) call to hit cache")
+	}
+	if _, fromCache := PipeRoutesFilteredProtocol(true, "pipeA", "master", "proto2"); !fromCache {
+		t.Error("Expected second PipeRoutesFilteredProtocol(proto2) call to hit cache")
 	}
 }

@@ -180,7 +180,7 @@ func RunAndParse(useCache bool, key string, cmd string, parser func(io.Reader) P
 	var wg sync.WaitGroup
 
 	if useCache {
-		if val, ok := fromCache(cmd); ok {
+		if val, ok := fromCache(key); ok {
 			return val, true
 		}
 	}
@@ -189,7 +189,7 @@ func RunAndParse(useCache bool, key string, cmd string, parser func(io.Reader) P
 	if queueGroup, queueLoaded := RunQueue.LoadOrStore(cmd, &wg); queueLoaded {
 		(*queueGroup.(*sync.WaitGroup)).Wait()
 
-		if val, ok := fromCache(cmd); ok {
+		if val, ok := fromCache(key); ok {
 			return val, true
 		} else {
 			// TODO BirdError should also be signaled somehow
@@ -220,7 +220,7 @@ func RunAndParse(useCache bool, key string, cmd string, parser func(io.Reader) P
 		updateCache(&parsed)
 	}
 
-	toCache(cmd, parsed)
+	toCache(key, parsed)
 
 	return parsed, false
 }
@@ -439,7 +439,7 @@ func PipeRoutesFilteredProtocol(
 	fmt.Println("CMD:", cmd)
 	return RunAndParse(
 		useCache,
-		GetCacheKey("PipeRoutesFiltered", table, pipe),
+		GetCacheKey("PipeRoutesFilteredProtocol", table, pipe, protocol),
 		cmd,
 		parseRoutes,
 		nil)
