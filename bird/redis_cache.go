@@ -55,10 +55,10 @@ func (self *RedisCache) Get(key string) (Parsed, error) {
 	}
 	// Deal with the inband TTL if present
 	if !ttl.Equal(time.Time{}) && ttl.Before(time.Now()) {
-		return NilParse, err // TTL expired
+		return NilParse, fmt.Errorf("TTL expired for key: %s", key)
 	}
 
-	return parsed, err // cache hit
+	return parsed, nil // cache hit
 }
 
 // Set adds a birdwatcher `Parsed` result
